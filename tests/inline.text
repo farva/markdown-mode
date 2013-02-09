@@ -28,3 +28,13 @@ they should even match across across lines `` ```
 across two blocks``.
 
 Links have several components: [text](http://www.w3.org/ "title").
+
+***This is strong and em.***
+
+So is ***this*** word.
+
+___This is strong and em.___
+
+So is ___this___ word.
+
+This ***is* a mixture** and ***so is** this*.
