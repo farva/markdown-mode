@@ -1432,12 +1432,12 @@ Function is called repeatedly until it returns nil. For details, see
       (let* ((new-start (progn (goto-char start)
                                (if (re-search-backward
                                     markdown-regex-block-separator nil t)
-                                   (min start (match-end 0))
+                                   (min start (match-beginning 0))
                                  (point-min))))
              (new-end (progn (goto-char end)
                              (if (re-search-forward
                                   markdown-regex-block-separator nil t)
-                                 (max end (match-beginning 0))
+                                 (max end (match-end 0))
                                (point-max))))
              (code-match (markdown-code-block-at-pos new-start))
              (new-start (or (and code-match (cl-first code-match)) new-start))
