@@ -1835,6 +1835,26 @@ Group 2 matches the opening square bracket.
 Group 3 matches the footnote text, without the surrounding markup.
 Group 4 matches the closing square bracket.")
 
+(defconst markdown-regex-html-attr
+  "\\(\\<[[:alpha:]:-]+\\>\\)\\(\\s-*\\(=\\)\\s-*\\(\".*?\"\\|'.*?'\\|[^'\">[:space:]]+\\)?\\)?"
+  "Regular expression for matching HTML attributes and values.
+Group 1 matches the attribute name.
+Group 2 matches the following whitespace, equals sign, and value, if any.
+Group 3 matches the equals sign, if any.
+Group 4 matches single-, double-, or un-quoted attribute values.")
+
+(defconst markdown-regex-html-tag
+  (concat "\\(</?\\)\\(\\w+\\)\\(\\(\\s-+" markdown-regex-html-attr
+          "\\)+\\s-*\\|\\s-*\\)\\(/?>\\)")
+  "Regular expression for matching HTML tags.
+Groups 1 and 9 match the beginning and ending angle brackets and slashes.
+Group 2 matches the tag name.
+Group 3 matches all attributes and whitespace following the tag name.")
+
+(defconst markdown-regex-html-entity
+  "\\(&#?[[:alnum:]]+;\\)"
+  "Regular expression for matching HTML entities.")
+
 
 ;;; Syntax ====================================================================
 
@@ -2718,6 +2738,31 @@ For example, this applies to plain angle bracket URLs:
   "Face for horizontal rules."
   :group 'markdown-faces)
 
+(defface markdown-html-tag-name-face
+  '((t (:inherit font-lock-type-face)))
+  "Face for HTML tag names."
+  :group 'markdown-faces)
+
+(defface markdown-html-tag-delimiter-face
+  '((t (:inherit markdown-markup-face)))
+  "Face for HTML tag delimiters."
+  :group 'markdown-faces)
+
+(defface markdown-html-attr-name-face
+  '((t (:inherit font-lock-variable-name-face)))
+  "Face for HTML attribute names."
+  :group 'markdown-faces)
+
+(defface markdown-html-attr-value-face
+  '((t (:inherit font-lock-string-face)))
+  "Face for HTML attribute values."
+  :group 'markdown-faces)
+
+(defface markdown-html-entity-face
+  '((t (:inherit font-lock-variable-name)))
+  "Face for HTML entities."
+  :group 'markdown-faces)
+
 (defcustom markdown-header-scaling nil
   "Whether to use variable-height faces for headers.
 When non-nil, `markdown-header-face' will inherit from
@@ -2836,6 +2881,13 @@ Depending on your font, some reasonable choices are:
                             (3 markdown-markup-properties)))
     (markdown-fontify-angle-uris)
     (,markdown-regex-email . 'markdown-plain-url-face)
+    (,markdown-regex-html-tag . ((1 'markdown-html-tag-delimiter-face t)
+                                 (2 'markdown-html-tag-name-face t)
+                                 (9 'markdown-html-tag-delimiter-face t)))
+    (markdown-match-html-attr . ((1 'markdown-html-attr-name-face)
+                                 (2 'markdown-html-tag-delimiter-face nil t)
+                                 (3 'markdown-html-attr-value-face nil t)))
+    (,markdown-regex-html-entity . 'markdown-html-entity-face)
     (markdown-fontify-list-items)
     (,markdown-regex-footnote . ((0 markdown-inline-footnote-properties)
                                  (1 markdown-markup-properties)    ; [^
@@ -4075,6 +4127,82 @@ Group 7: closing filename delimiter"
         (when (< (point) last)
           (setq valid (markdown-match-includes last)))))
       valid)))
+
+(defun markdown-match-html-attr (last)
+  "Match HTML attributes from point to LAST."
+  (let (first found)
+    ;; Keep track of the beginning of the search region.
+    (setq first (point))
+    ;; If the point is inside of an HTML tag, look for attributes.
+    (when (thing-at-point-looking-at markdown-regex-html-tag)
+      ;; If attribute portion of tag is non-empty and extends past
+      ;; `first', keep looking.
+      (when (and (> (length (match-string 3)) 0)
+                 (> (match-end 3) first))
+        ;; Go to the end of the tag name, but don't move the point
+        ;; before the start of the search region.
+        (goto-char (max (match-end 2) first))
+        ;; Look for an attribute with a non-empty attribute.
+        ;; Don't go past the end of the tag.
+        (if (re-search-forward markdown-regex-html-attr (match-end 0) t)
+            ;; Found a match for given group, set match data and return.
+            (progn
+              (cond
+               ((> (length (match-string 4)) 0)
+                (set-match-data (list (match-beginning 1) (match-end 4)
+                                      (match-beginning 1) (match-end 1)
+                                      (match-beginning 3) (match-end 3)
+                                      (match-beginning 4) (match-end 4))))
+               ((> (length (match-string 3)) 0)
+                (set-match-data (list (match-beginning 1) (match-end 3)
+                                      (match-beginning 1) (match-end 1)
+                                      (match-beginning 3) (match-end 3))))
+               (t
+                (set-match-data (list (match-beginning 1) (match-end 1)
+                                      (match-beginning 1) (match-end 1)))))
+              (setq found t))
+          ;; Otherwise, return the point to the beginning of the region.
+          (goto-char first))))
+
+    ;; If the point was not inside of an HTML tag, or if no attribtue
+    ;; was found, keep searching.
+    (unless found
+      ;; Loop until reaching the end of the region or finding an attribute.
+      (while (and (< first last) (not found))
+        ;; Search for HTML tag with non-empty attribute component.
+        (if (re-search-forward markdown-regex-html-tag last t)
+            (when (> (length (markdown--chomp (match-string 3))) 0)
+              ;; Attribute of positive length found, exit loop
+              (setq found t))
+          ;; No match found, exit loop
+          (setq first (goto-char last))))
+
+      (if (not found)
+          ;; If there was no match, return nil.
+          nil
+        ;; Go to the end of the tag name.
+        (goto-char (match-end 2))
+        ;; Look for an attribute with a non-empty match for `group'.
+        ;; Don't go past the end of the tag.
+        (if (re-search-forward markdown-regex-html-attr (match-end 0) t)
+            (progn
+              ;; Found a match for given group, set match data and return.
+              (cond
+               ((> (length (match-string 4)) 0)
+                (set-match-data (list (match-beginning 1) (match-end 4)
+                                      (match-beginning 1) (match-end 1)
+                                      (match-beginning 3) (match-end 3)
+                                      (match-beginning 4) (match-end 4))))
+               ((> (length (match-string 3)) 0)
+                (set-match-data (list (match-beginning 1) (match-end 3)
+                                      (match-beginning 1) (match-end 1)
+                                      (match-beginning 3) (match-end 3))))
+               (t
+                (set-match-data (list (match-beginning 1) (match-end 1)
+                                      (match-beginning 1) (match-end 1)))))
+              (setq found t))
+          (setq found nil))))
+    found))
 
 
 ;;; Markdown Font Fontification Functions =====================================
@@ -8591,6 +8719,12 @@ or span."
   (let ((pos (1- (point))))
     (or (markdown-inline-code-at-pos pos)
         (markdown-code-block-at-pos pos))))
+
+(defun markdown--chomp (str)
+  "Trim leading and trailing whitespace from STR."
+  (let ((s str))
+    (replace-regexp-in-string
+     "\\(^[[:space:]\n]*\\|[[:space:]\n]*$\\)" "" s)))
 
 
 ;;; Extension Framework =======================================================
