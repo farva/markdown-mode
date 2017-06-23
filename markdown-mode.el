@@ -1612,15 +1612,26 @@ Group 4 matches the info string (optional).
 Group 5 matches the closing brace (optional) and any surrounding whitespace.
 Groups need to agree with `markdown-regex-gfm-code-block-open'.")
 
-(defconst markdown-regex-declarative-metadata
-  "^\\([[:alpha:]][[:alpha:] _-]*?\\)\\([:=][ \t]*\\)\\(.*\\)$"
-  "Regular expression for matching declarative metadata statements.
-This matches MultiMarkdown metadata as well as YAML and TOML
-assignments such as the following:
+(defsubst markdown-make-metadata-regex (key-end-char)
+  "Return regular expression for matching metadata assignments.
+KEY-END-CHAR is : for MultiMarkdown metadata and = for YAML and TOML."
+  (concat "^\\([[:alpha:]][[:alpha:] _-]*?\\)"
+          "\\(" key-end-char "[ \t]*\\)"
+          "\\(.*\\)$"))
+
+(defconst markdown-regex-multimarkdown-metadata
+  (markdown-make-metadata-regex ":")
+  "Regular expression for matching MultiMarkdown metadata statements.
+These have the form
 
     variable: value
 
-or
+and must appear at the beginning of a file, before any blank lines.")
+
+(defconst markdown-regex-declarative-metadata
+  (markdown-make-metadata-regex "=")
+  "Regular expression for matching declarative metadata statements.
+This matches YAML and TOML assignments such as the following:
 
     variable = value")
 
@@ -2682,6 +2693,9 @@ Depending on your font, some reasonable choices are:
     (markdown-match-pandoc-metadata . ((1 markdown-markup-face)
                                        (2 markdown-markup-face)
                                        (3 markdown-metadata-value-face)))
+    (markdown-match-multimarkdown-metadata . ((1 markdown-markup-face)
+                                              (2 markdown-markup-face)
+                                              (3 markdown-metadata-value-face)))
     (markdown-fontify-hrs)
     (markdown-match-code . ((1 markdown-markup-properties prepend)
                             (2 markdown-inline-code-face prepend)
@@ -3332,13 +3346,20 @@ Uses text properties at the beginning of the line position.
 This includes pre blocks, tilde-fenced code blocks, and GFM
 quoted code blocks.  Return nil otherwise."
   (setq pos (save-excursion (goto-char pos) (point-at-bol)))
-  (or (get-text-property pos 'markdown-pre)
-      (markdown-get-enclosing-fenced-block-construct pos)
-      ;; polymode removes text properties set by markdown-mode, so
-      ;; check if `poly-markdown-mode' is active and whether the
-      ;; `chunkmode' property is non-nil at POS.
-      (and (bound-and-true-p poly-markdown-mode)
-           (get-text-property pos 'chunkmode))))
+  (let ((props (text-properties-at pos)))
+    (or (get-text-property pos 'markdown-pre)
+        (get-text-property pos 'markdown-code-block)
+        (get-text-property pos 'markdown-gfm-block-begin)
+        (get-text-property pos 'markdown-gfm-code)
+        (get-text-property pos 'markdown-gfm-block-end)
+        (get-text-property pos 'markdown-tilde-fence-begin)
+        (get-text-property pos 'markdown-fenced-code)
+        (get-text-property pos 'markdown-tilde-fence-end)
+        ;; polymode removes text properties set by markdown-mode, so
+        ;; check if `poly-markdown-mode' is active and whether the
+        ;; `chunkmode' property is non-nil at POS.
+        (and (bound-and-true-p poly-markdown-mode)
+             (get-text-property pos 'chunkmode)))))
 
 ;; Function was renamed to emphasize that it does not modify match-data.
 (defalias 'markdown-code-block-at-point 'markdown-code-block-at-point-p)
@@ -3698,18 +3719,20 @@ links with URLs."
     (goto-char (1+ (match-end 0)))))
 
 (defun markdown-get-match-boundaries (start-header end-header last &optional pos)
+  (message "DEBUG: markdown-get-match-boundaries (%s %s %s %s)" start-header end-header last pos)
   (save-excursion
     (goto-char (or pos (point-min)))
     (cl-loop
      with cur-result = nil
      and st-hdr = (or start-header "\\`")
-     and end-hdr = (or end-header "\n\n\\|\n\\'\\|\\'")
+     and end-hdr = (or end-header "\n[ \t]*\n\\|\n\\'\\|\\'")
      while (and (< (point) last)
                 (re-search-forward st-hdr last t)
                 (progn
                   (setq cur-result (match-data))
                   (re-search-forward end-hdr nil t)))
      collect (list cur-result (match-data)))))
+
 
 (defvar markdown-conditional-search-function #'re-search-forward
   "Conditional search function used in `markdown-search-until-condition'.
@@ -3727,21 +3750,30 @@ Made into a variable to allow for dynamic let-binding.")
 If START-HEADER is nil, we assume metadata can only occur at the
 very top of a file (\"\\`\"). If END-HEADER is nil, we assume it
 is \"\n\n\""
+  (message "DEBUG: markdown-match-generic-metadata point = %s, last = %s)" (point) last)
   (let* ((header-bounds
           (markdown-get-match-boundaries start-header end-header last))
+         (debug (message "DEBUG: header-bounds = %s" header-bounds))
          (enclosing-header
           (cl-find-if                   ; just take first if multiple
            (lambda (match-bounds)
              (cl-destructuring-bind (begin end) (cl-second match-bounds)
+               (message "DEBUG: point = %s, begin = %s, end = %s" (point) begin end)
                (and (< (point) begin)
+                    (message "DEBUG: (< (point) begin) condition met")
                     (save-excursion (re-search-forward regexp end t)))))
            header-bounds))
+         (debug (message "DEBUG: enclosing-header = %s" enclosing-header))
          (header-begin
           (when enclosing-header (cl-second (cl-first enclosing-header))))
+         (debug (message "DEBUG: header-begin = %s" header-begin))
          (header-end
-          (when enclosing-header (cl-first (cl-second enclosing-header)))))
+          (when enclosing-header (cl-first (cl-second enclosing-header))))
+         (debug (message "DEBUG: header-end = %s" header-end))
+         )
     (cond ((null enclosing-header)
            ;; Don't match anything outside of a header.
+           (debug (message "DEBUG: Don't match anything outside of a header, point = %s, last = %s" (point) last))
            nil)
           ((markdown-search-until-condition
             (lambda () (> (point) header-begin)) regexp (min last header-end) t)
@@ -3765,6 +3797,10 @@ is \"\n\n\""
 (defun markdown-match-pandoc-metadata (last)
   "Match Pandoc metadata from the point to LAST."
   (markdown-match-generic-metadata markdown-regex-pandoc-metadata last))
+
+(defun markdown-match-multimarkdown-metadata (last)
+  "Match Multimarkdown metadata from the point to LAST."
+  (markdown-match-generic-metadata markdown-regex-multimarkdown-metadata last))
 
 (defun markdown-match-yaml-metadata-begin (last)
   (markdown-match-propertized-text 'markdown-yaml-metadata-begin last))
