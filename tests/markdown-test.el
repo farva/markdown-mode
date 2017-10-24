@@ -4970,16 +4970,15 @@ This includes preserving whitespace after the pipe."
    (should markdown-enable-math)))
 
 (ert-deftest test-markdown-math/reload ()
-  "Test enabling math mode via function `markdown-enable-math'."
+  "Test enabling math mode via variable `markdown-enable-math'."
   (let ((markdown-enable-math t))
     (markdown-test-file "math.text"
       ;; Flag should be set to t
       (should markdown-enable-math)
-      ;; Font-lock keywords should be updated
-      (should (member (cons markdown-regex-math-display '((1 markdown-markup-face prepend)
-                                                          (2 markdown-math-face append)
-                                                          (3 markdown-markup-face prepend)))
-                      markdown-mode-font-lock-keywords)))))
+      ;; Check first math mode keyword
+      (let (kw (car (markdown-mode-font-lock-keywords-math)))
+        ;; Font-lock keywords should be updated
+        (should (member kw markdown-mode-font-lock-keywords))))))
 
 (ert-deftest test-markdown-math/font-lock ()
   "Test markdown math mode."
